@@ -1,3 +1,4 @@
+//gcc -o Calendar-2.exe Calendar-2.c -lws2_32   ./Calendar-2
 // Calendar-1.c ? サーバ（暦計算側）
 #include <stdio.h>
 #include <stdlib.h>

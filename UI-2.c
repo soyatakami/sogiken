@@ -1,6 +1,13 @@
-// UI-1.c ? クライアント（UI側）
+// 通信ができない場合のエラー対応・エラー表示ができていない
+// 20000.1とすると20000とされてしまう．丸め込み誤差とかが原因？ 200000.1なら200001となる
+// 20000.1日としたときのエラー対応・エラー表示の仕方は？方式設計書との兼ね合い
+// 一度サーバとつないだらつなぎっぱなしか，計算ボタン押すごとに切断するのか
+// ラジオボタンとかほかにもエラー対応しとかないといけない？要求仕様書，ソ的との兼ね合い
+// gcc -o UI-2.exe UI-2.c -lws2_32 -lcomctl32   ./UI-2
+// UI-2.c ? クライアント（UI側）
 #include <winsock2.h> // 必ず windows.h より先
 #include <windows.h>
+#include <commctrl.h> // Date and Time Picker 用
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +15,7 @@
 #include <math.h>
 
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "comctl32.lib")
 
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 12345
@@ -74,7 +82,8 @@ enum
     ID_BUTTON_CALC = 2007,
     ID_BUTTON_EXIT = 2008,
     ID_STATIC_ERROR = 2009,
-    ID_STATIC_RESULT = 2010
+    ID_STATIC_RESULT = 2010,
+    ID_DATE_PICKER = 2011 // 追加: DateTime Picker
 };
 
 // ===== エラーID =====
@@ -119,7 +128,7 @@ static const char *CommErrorMessages[] = {
 
 // ===== グローバル（UIハンドル類と検証中間値）=====
 static HINSTANCE g_hInst;
-static HWND g_hEditDate, g_hEditDays, g_hStaticErr, g_hStaticRes;
+static HWND g_hEditDate, g_hDatePicker, g_hEditDays, g_hStaticErr, g_hStaticRes;
 static ErrorInfo g_LastDaysErr;
 static SYSTEMTIME g_LastDateReplacement;
 static int g_commErrorCount = 0;
@@ -481,12 +490,45 @@ unsigned int UIProcessMain(InputData *in, CorrectedData *corr, ResultData *res,
     return errFlags;
 }
 
+// ===== 新規: カレンダー→EDIT 同期 =====
+static void SyncDatePickerToEdit(void)
+{
+    SYSTEMTIME st;
+    if (DateTime_GetSystemtime(g_hDatePicker, &st) == GDT_VALID)
+    {
+        char buf[32];
+        wsprintfA(buf, "%04u %02u %02u", st.wYear, st.wMonth, st.wDay);
+        SetWindowTextA(g_hEditDate, buf);
+    }
+}
+
+// ===== 新規: EDIT→カレンダー 同期 =====
+static void SyncEditToDatePicker(void)
+{
+    char buf[64];
+    GetWindowTextA(g_hEditDate, buf, sizeof(buf));
+    unsigned int y, m, d;
+    if (sscanf_s(buf, "%u %u %u", &y, &m, &d) == 3)
+    {
+        SYSTEMTIME st = {0};
+        st.wYear = (WORD)y;
+        st.wMonth = (WORD)m;
+        st.wDay = (WORD)d;
+        DateTime_SetSystemtime(g_hDatePicker, GDT_VALID, &st);
+    }
+}
+
 // ===== WndProc（計算ボタン）=====
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
     case WM_COMMAND:
+        if (HIWORD(wParam) == EN_KILLFOCUS && LOWORD(wParam) == ID_EDIT_DATE)
+        {
+            // 日付手入力 → カレンダーへ反映
+            SyncEditToDatePicker();
+        }
         switch (LOWORD(wParam))
         {
         case ID_BUTTON_EXIT:
@@ -500,9 +542,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             char daysBuf[64] = {0};
             int commErrId = COMM_ERR_NONE;
 
+            // カレンダーの選択内容を EDIT に反映してから収集（念のため）
+            SyncDatePickerToEdit();
+
+            // 入力収集
             CollectData(hwnd, &in, daysBuf, sizeof(daysBuf));
+
+            // メイン処理
             unsigned int errFlags = UIProcessMain(&in, &corr, &res, daysBuf, sizeof(daysBuf), &commErrId);
 
+            // 結果表示 or 通信エラー表示
             if (commErrId != COMM_ERR_NONE)
             {
                 SetWindowTextA(g_hStaticErr, CommErrorMessages[commErrId]);
@@ -515,6 +564,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         }
         break;
+
+    case WM_NOTIFY:
+    {
+        LPNMHDR pnmh = (LPNMHDR)lParam;
+        if (pnmh->idFrom == ID_DATE_PICKER && pnmh->code == DTN_DATETIMECHANGE)
+        {
+            // カレンダー選択 → EDIT へ反映
+            SyncDatePickerToEdit();
+        }
+        break;
+    }
+
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
@@ -526,6 +587,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nCmdShow)
 {
     g_hInst = hInst;
+
+    // コモンコントロール初期化（DateTime Picker）
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(icex);
+    icex.dwICC = ICC_DATE_CLASSES;
+    InitCommonControlsEx(&icex);
 
     const char *kClass = "CalendarAppClass";
     WNDCLASSA wc = {0};
@@ -548,10 +615,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nCmdShow)
     if (!hwnd)
         return 0;
 
+    // ラベル・入力欄
     CreateWindowA("STATIC", "開始日 (YYYY MM DD):", WS_CHILD | WS_VISIBLE,
                   20, 20, 170, 20, hwnd, NULL, g_hInst, NULL);
     g_hEditDate = CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                                200, 18, 160, 24, hwnd, (HMENU)ID_EDIT_DATE, g_hInst, NULL);
+                                200, 18, 140, 24, hwnd, (HMENU)ID_EDIT_DATE, g_hInst, NULL);
+
+    // DateTime Picker（カレンダー）を EDIT の右に配置
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    g_hDatePicker = CreateWindowExA(
+        0, DATETIMEPICK_CLASS, NULL,
+        WS_CHILD | WS_VISIBLE | DTS_SHORTDATEFORMAT,
+        350, 18, 140, 24, hwnd, (HMENU)ID_DATE_PICKER, g_hInst, NULL);
+    DateTime_SetSystemtime(g_hDatePicker, GDT_VALID, &st);
+
+    // 初期状態として EDIT へも反映
+    {
+        char buf[32];
+        wsprintfA(buf, "%04u %02u %02u", st.wYear, st.wMonth, st.wDay);
+        SetWindowTextA(g_hEditDate, buf);
+    }
 
     CreateWindowA("STATIC", "日数:", WS_CHILD | WS_VISIBLE,
                   20, 56, 100, 20, hwnd, NULL, g_hInst, NULL);
