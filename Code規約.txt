@@ -1,0 +1,302 @@
+// プロトタイプ
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+void CollectData(HWND, InputData*);
+unsigned int InvalidValueHandling(InputData*, SendData*);
+static void BuildPacketFromSendData(const SendData*, uint32_t outWords[6]);
+static void ParsePacketToRecData(const uint32_t inWords[6], RecData*);
+static int send_all(SOCKET, const char*, int);
+static int recv_all(SOCKET, char*, int);
+int connectToCoyomi(void);
+int UISendReceive(const SendData*, RecData*);
+void CloseConnection(void);
+void ShowResultStatus(const SendData*, const RecData*, int, int, int, int, int, int, int, int);
+SYSTEMTIME AddDays(SYSTEMTIME, unsigned int, bool, bool);
+const char* GetWeekdayName(int);
+//static void CreateWindowModule(HWND hwnd, HINSTANCE hInst);
+static void createWindow(HWND hwnd, HINSTANCE hInst);
+////int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int);[wWinMainとwinMainは異なるものなのでコンパイル方法が変わる]
+////そのため，ソ詳でWinMainのモジュールの中の関数の名前がwWinMainになっていることを説明しないといけないかも
+
+命名規則
+モジュール名：ConnectToCoyomi
+関数名：connectToCoyomi
+定数：CONNECT_TO_COUOMI
+
+グローバル変数
+vsock UIClientSocket
+Whwnd MainWindow
+Whwnd StartData 
+Whwnd CalcDay
+Whwnd RadioZero
+Whwnd RadioOne
+Whwnd RadioBefore
+Whwnd RadioAfter
+Whwnd OutputBoxResult
+Whwnd OutputBoxMessage
+IP_ADDR_SERVER IPアドレス 127.0.0.1 
+PORT_NUMBER ポート番号 50000
+vsock CoyomiClientSocket
+vsock CoyomiListeningSocket
+
+int ErrorID_01 //エラーが起こった時に0→1に変化してエラー内容を記録しておく //ConnectToCoyomiでクライアントソケットを作製時にエラーが発生したら0→1に
+int ErrorID_02 //ConnectToCoyomiでサーバー側とconnectできないときに0→1に
+int ErrorID_03 //UISentReciveで送信が出来ない場合に0→1に
+int ErrorID_04 //UISentReciveで受信が出来ない場合に0→1に
+int ErrorID_05 //2010年の1月1日～2099年の12月31日以外の開始日が入力されたので今日に日付に変えた時に0→1に
+int ErrorID_06 //10000より大きな日数が入力された場合に10000に変えた場合に0→1に
+int ErrorID_07 //少数点がある場合に，切り上げた日数にした場合に0→1に
+int ErrorID_08 //少数点の切り上げのために，10000以上になった場合に0→1に
+int ErrorID_09 //日数として無効な値が入植された為，1日に変換した場合に0→1に
+int ErrorID_10 //
+int ErrorID_11 //
+int ErrorID_12 //
+int ErrorID_13 //
+
+対応するメッセージ（コードにそのまま張り付けている）
+ErrorID_01---ConnectToCoyomiでクライアントソケットを作製時にエラーが発生しました．
+ErrorID_02---ConnectToCoyomiでCoyomiプログラムと通信出来ていません．
+ErrorID_03---UISentReciveで送信が出来ません．
+ErrorID_04---UISentReciveで受信が出来ません．
+ErrorID_05---010年の1月1日～2099年の12月31日以外の開始日が入力されたので今日に日付に変更しました．
+ErrorID_06---10000日より大きな日数が入力されたされたので，10000日としました．
+ErrorID_07---少数点があるので，切り上げ○○日に変更しました．（〇〇はSendDataの整数を書き出す）
+ErrorID_08---少数点の切り上げのため，10000日以上となったので，10000日に変更しました．
+ErrorID_09---日数として無効な値が入植された為，1日に変換しました．
+
+構造体
+typedef struct {
+    uint32_t InputDataYear;
+    uint32_t InputDataMonth;
+    uint32_t InputDataDay;
+    char     InputDataNdaysText[20]; // 日数（UTF-8文字列）※検証前の生データ
+    bool     InputDataFlag01;         // 0/1日目（true=1日目）
+    bool     InputDataDirAfter;      // 前後（true=後, false=前）
+} InputData;
+
+#pragma pack(1)
+typedef struct {
+    uint32_t SendDataYear;
+    uint32_t SendDataMonth;
+    uint32_t SendDataDay;
+    short    SendDataNdays; // 日数（UTF-8文字列）※検証前の生データ
+    bool     SendDataFlag01;         // 0/1日目（true=1日目）
+    bool     SendDataDirAfter;      // 前後（true=後, false=前）
+} SendData;
+
+#pragma pack(1)
+typedef struct {
+    uint32_t RecDataaYear;
+    uint32_t RecDataMonth;
+    uint32_t RecDataDay;
+    short    RecDataNdays; 
+    bool     RecDataFlag01;         // 0/1日目（true=1日目）
+    bool     RecDataDirAfter;      // 前後（true=後, false=前）
+} RecData;
+
+GUI画面の設定に使用した定位の命名
+static int GUI_COMMENT_1_XP = 20;
+static int GUI_COMMENT_1_YP = 25;
+static int GUI_COMMENT_1_XS = 60;
+static int GUI_COMMENT_1_YS = 20;
+static int GUI_COMMENT_1_PT = 12;
+
+static int GUI_CALENDAR_XP = 100;
+static int GUI_CALENDAR_YP = 20;
+static int GUI_CALENDAR_XS = 200;
+static int GUI_CALENDAR_YS = 30;
+static int GUI_CALENDAR_PT = 12;
+
+static int GUI_COMMENT_2_XP = 320;
+static int GUI_COMMENT_2_YP = 20;
+static int GUI_COMMENT_2_XS = 200;
+static int GUI_COMMENT_2_YS = 35;
+static int GUI_COMMENT_2_PT = 6;
+
+static int GUI_COMMENT_3_XP = 20;
+static int GUI_COMMENT_3_YP = 75;
+static int GUI_COMMENT_3_XS = 75;
+static int GUI_COMMENT_3_YS = 20;
+static int GUI_COMMENT_3_PT = 12;
+
+static int GUI_RADIOBOX_ZERO_XP = 100;
+static int GUI_RADIOBOX_ZERO_YP = 75;
+static int GUI_RADIOBOX_ZERO_XS = 75;
+static int GUI_RADIOBOX_ZERO_YS = 20;
+static int GUI_RADIOBOX_ZERO_PT = 12;
+
+static int GUI_RADIOBOX_ONE_XP = 180;
+static int GUI_RADIOBOX_ONE_YP = 75;
+static int GUI_RADIOBOX_ONE_XS = 75;
+static int GUI_RADIOBOX_ONE_YS = 20;
+static int GUI_RADIOBOX_ONE_PT = 12;
+
+static int GUI_COMMENT_4_XP = 260;
+static int GUI_COMMENT_4_YP = 75;
+static int GUI_COMMENT_4_XS = 75;
+static int GUI_COMMENT_4_YS = 20;
+static int GUI_COMMENT_4_PT = 12;
+
+static int GUI_COMMENT_5_XP = 20;
+static int GUI_COMMENT_5_YP = 125;
+static int GUI_COMMENT_5_XS = 75;
+static int GUI_COMMENT_5_YS = 20;
+static int GUI_COMMENT_5_PT = 12;
+
+static int GUI_SHIFTDAYS_XP = 100;
+static int GUI_SHIFTDAYS_YP = 125;
+static int GUI_SHIFTDAYS_XS = 75;
+static int GUI_SHIFTDAYS_YS = 25;
+static int GUI_SHIFTDAYS_PT = 12;
+
+static int GUI_COMMENT_6_XP = 180;
+static int GUI_COMMENT_6_YP = 125;
+static int GUI_COMMENT_6_XS = 25;
+static int GUI_COMMENT_6_YS = 20;
+static int GUI_COMMENT_6_PT = 12;
+
+static int GUI_RADIOBOX_BEFORE_XP = 210;
+static int GUI_RADIOBOX_BEFORE_YP = 110;
+static int GUI_RADIOBOX_BEFORE_XS = 50;
+static int GUI_RADIOBOX_BEFORE_YS = 20;
+static int GUI_RADIOBOX_BEFORE_PT = 12;
+
+static int GUI_RADIOBOX_AFTER_XP = 210;
+static int GUI_RADIOBOX_AFTER_YP = 140;
+static int GUI_RADIOBOX_AFTER_XS = 50;
+static int GUI_RADIOBOX_AFTER_YS = 20;
+static int GUI_RADIOBOX_AFTER_PT = 12;
+
+static int GUI_COMMENT_7_XP = 20;
+static int GUI_COMMENT_7_YP = 155;
+static int GUI_COMMENT_7_XS = 200;
+static int GUI_COMMENT_7_YS = 12;
+static int GUI_COMMENT_7_PT = 6;
+
+static int GUI_EXECUTION_XP = 270;
+static int GUI_EXECUTION_YP = 125;
+static int GUI_EXECUTION_XS = 100;
+static int GUI_EXECUTION_YS = 25;
+static int GUI_EXECUTION_PT = 12;
+
+static int GUI_END_XP = 400;
+static int GUI_END_YP = 125;
+static int GUI_END_XS = 100;
+static int GUI_END_YS = 25;
+static int GUI_END_PT = 12;
+
+static int GUI_COMMENT_8_XP = 20;
+static int GUI_COMMENT_8_YP = 170;
+static int GUI_COMMENT_8_XS = 150;
+static int GUI_COMMENT_8_YS = 20;
+static int GUI_COMMENT_8_PT = 12;
+
+static int GUI_COMMENT_9_XP = 270;
+static int GUI_COMMENT_9_YP = 170;
+static int GUI_COMMENT_9_XS = 150;
+static int GUI_COMMENT_9_YS = 20;
+static int GUI_COMMENT_9_PT = 12;
+
+static int GUI_MESSAGE_XP = 20;
+static int GUI_MESSAGE_YP = 200;
+static int GUI_MESSAGE_XS = 225;
+static int GUI_MESSAGE_YS = 75;
+static int GUI_MESSAGE_PT = 6;
+
+static int GUI_OUTALL_XP  = 270;
+static int GUI_OUTALL_YP  = 200;
+static int GUI_OUTALL_XS  = 225;
+static int GUI_OUTALL_YS  = 75;
+static int GUI_OUTALL_PT  = 10;
+
+モジュール：関数の対応
+void CollectData(HWND hwndOwner, InputData* outIv)
+    戻り値：無
+    SendMessageW--API関数
+    GetLocalTime--API関数
+    GetWindowTextW---API関数
+    WideCharToMultiByte---API関数
+
+(int) connectToCoyomi(void)
+    戻り値：無
+    WSAStartup（WinSock API）
+    closesocket（WinSock API）
+    socket（WinSock API）
+    connect（WinSock API）
+    inet_addr（WinSock API）
+    htons（WinSock API）
+    ZeroMemory（WinAPIのマクロ）
+
+(int) UISendReceive(const SendData*, RecData*)
+    戻り値：
+    BuildPacketFromSendData
+    send_all（WinSockの send をラップして“送信し切る”ヘルパー）
+    recv_all（WinSockの recv をラップして“受信し切る”ヘルパー）
+    ParsePacketToRecData
+
+unsigned int InvalidValueHandling(InputData*, SendData*)
+    戻り値：
+    static int parse_ndays_utf8(const char* u8, bool* outRounded, bool* outTrigPositive)関数を使用している．
+        const char* u8---ユーザーから入力される文字列
+        bool* outRounded---力値が小数であったため整数に丸められたかどうか
+        bool* outTrigPositive---入力が不正または0以下だったため、強制的に 1 を返す処理になった
+        入力文字列	戻り値	outRounded	outTrigPositive
+        "10"	10	false	false
+        "3.2"	4	true	false
+        "0"	1	false	true
+        "-5"	1	false	true
+        "abc"	1	false	true
+        ""	1	false	true
+        "20000"	10000	false	false
+
+void ShowResultStatus(const SendData*, const RecData*, int ErrorID_01～08)
+    戻り値：無
+    TzSpecificLocalTimeToSystemTime（WinSock API）
+    SystemTimeToFileTime（WinSock API）
+    FileTimeToSystemTime（WinSock API）
+    MultiByteToWideChar（WinSock API）
+    SetWindowTextW（WinSock API）
+    swprintf（標準 C ライブラリ関数）
+    GetWeekdayName---「曜日文字列を返す関数」
+
+int WINAPI ShowWindow(HWND hWnd, int nCmdShow); //どちらで宣言しても問題なし．
+BOOL WINAPI ShowWindow(HWND hWnd, int nCmdShow);
+    戻り値：本当は無しが良い
+    しかし，static void型で宣言できない為，一応のint型で宣言しておく
+
+void createWindow(HWND hwnd, HINSTANCE hInst)
+    戻り値：無
+    CreateWindowExW（WinSock API）
+    SendMessageW（WinSock API）
+    make_font---指定したポイント数と太さで UI コントロール用のフォント (HFONT) を作って返すヘルパー関数
+
+static void UIProcessMain(void)
+    void型で宣言しているがint型で宣言する場合にも問題なし
+    引数に関しては下の階層にあるConnectToCoyomiやUISentReciveなどで使用している為，書かれていなくても引けていると思われる．
+
+
+本コードに対して実行した確認事項
+    前後，0/1のラジオボックスをそれぞれ独立したGUI子ハンドルとして扱える
+        前後で出力結果が変わるのか→変わった→Ok
+        0/1で出力結果が変わったのか→Ok
+        デフォルトで1日目が入っている→Ok
+        デフォルトで後が指定されている→Ok
+
+    10000日関係
+        Over10000日（20000日）を入れたら10000日に変更されるか→Ok
+
+    通信に関するエラーがあった場合に出力結果が出ない様にする．
+
+
+モジュール-関数の従属関係と命名規則順守確認と引数＆戻り値の関係
+WinMain---int WINAPI (HINSTANCE hInst, HINSTANCE hPrev, PWSTR lpCmdLine, int nShow) 問題点は名前を正しくできていない点
+    createWindow---void (HWND hwnd, HINSTANCE hInst)
+    ShowWindow---int型でVoid型を指定できない (MainWindow, nShow);
+WinProc---LRESULT CALLBACK (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+    CollectData---void (HWND hwndOwner, InputData* outIv)
+    ShowResultStatus---void (const SendData* send, const RecData* recv,int E01～int E09)
+UIProcessMain
+    ConnectToCoyomi---int connectToCoyomi(void) 戻り値がErrorID
+    InvalidValueHandling---unsigned int (InputData* in, SendData* outSend) 戻り値がErrorID
+    UISendReceive---int (const SendData* req, RecData* res) 戻り値がErrorID
+
+
